@@ -2029,6 +2029,7 @@
     // ====================== CORE ======================
     function init() {
         lucide.createIcons();
+        loadUsersFromCloud();   // pull central user accounts from the Sheet on startup
         // Set donation date default to today
         const _now = new Date();
         const _perthTZ = { timeZone: 'Australia/Perth' };
@@ -4033,14 +4034,10 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
         return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
     }
 
-    let appUsers = JSON.parse(safeStorage.getItem('ssmvp_users') || 'null');
-    if (!appUsers) {
-        hashPassword('Admin@123').then(h => {
-            appUsers = [{ id: 'u1', name: 'Admin', email: 'donations@vadtaldhamperth.org', role: 'admin', passwordHash: h, mustChangePassword: true }];
-            safeStorage.setItem('ssmvp_users', JSON.stringify(appUsers));
-        });
-        appUsers = [{ id: 'u1', name: 'Admin', email: 'donations@vadtaldhamperth.org', role: 'admin', passwordHash: '__pending__', mustChangePassword: true }];
-    }
+    // User accounts live centrally in the Google Sheet so logins work from any device.
+    // Start from the local cache (fast/offline fallback), then refresh from the Sheet on
+    // startup and at every login (see loadUsersFromCloud / init / loginStep1).
+    let appUsers = JSON.parse(safeStorage.getItem('ssmvp_users') || '[]');
 
     let currentUser  = null;
     let mfaCode      = null;   // email OTP
@@ -4088,6 +4085,7 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
             errEl.style.display = 'block'; return;
         }
 
+        await loadUsersFromCloud();   // refresh the central user list so accounts created elsewhere are recognised
         const user = appUsers.find(u => u.email.toLowerCase() === email);
         if (!user) {
             recordLoginFail(email);
@@ -4691,14 +4689,76 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
         const user = appUsers.find(u => u.id === userId);
         if (!confirm(`Delete user "${user.name}"? They will no longer be able to log in.`)) return;
         appUsers = appUsers.filter(u => u.id !== userId);
+        deleteUserFromCloud(userId);
         saveAppUsers();
         renderUsersGrid();
         audit('user_deleted', `User "${user.name}" deleted`, `Email: ${user.email} · Role: ${user.role}`);
         showToast(`User "${user.name}" removed.`, 'red');
     }
 
+    // ── Central user accounts (stored in the Google Sheet → logins work anywhere) ──
+    async function pushUserToCloud(u) {
+        if (!syncConfig.url) return;
+        try {
+            await fetch(syncConfig.url, {
+                method:  'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body:    JSON.stringify({
+                    key: await authToken(), tab: 'Users',
+                    userId: u.id, name: u.name || '', email: u.email || '', role: u.role || 'volunteer',
+                    passwordHash: u.passwordHash || '', mfaMethod: u.mfaMethod || '',
+                    totpSecret: u.totpSecret || '', mustChangePassword: u.mustChangePassword ? 'true' : 'false'
+                })
+            });
+        } catch (err) { console.warn('User sync failed:', err); }
+    }
+
+    async function deleteUserFromCloud(userId) {
+        if (!syncConfig.url) return;
+        try {
+            await fetch(syncConfig.url, {
+                method:  'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body:    JSON.stringify({ key: await authToken(), tab: '__delete_user__', userId })
+            });
+        } catch (err) { console.warn('User delete sync failed:', err); }
+    }
+
+    // Pull the authoritative user list from the Sheet; seed the first admin if empty.
+    async function loadUsersFromCloud() {
+        try {
+            if (syncConfig.url) {
+                const res  = await fetch(syncConfig.url + '?action=users&key=' + encodeURIComponent(await authToken()), { method: 'GET' });
+                const data = await res.json().catch(() => ({}));
+                if (data && Array.isArray(data.users)) {
+                    appUsers = data.users.map(r => {
+                        const u = { id: r.userId, name: r.name || '', email: r.email || '', role: r.role || 'volunteer',
+                                    passwordHash: r.passwordHash || '', mfaMethod: r.mfaMethod || '',
+                                    mustChangePassword: String(r.mustChangePassword) === 'true' };
+                        if (r.totpSecret) u.totpSecret = r.totpSecret;
+                        return u;
+                    });
+                    safeStorage.setItem('ssmvp_users', JSON.stringify(appUsers));   // local fallback cache
+                }
+            }
+        } catch (err) {
+            console.warn('Could not load users from the Sheet — using local cache:', err);
+        }
+        // First-ever run anywhere: seed the default admin and save it centrally.
+        if (!appUsers.length) {
+            const h = await hashPassword('Admin@123');
+            const admin = { id: 'u1', name: 'Admin', email: 'donations@vadtaldhamperth.org', role: 'admin',
+                            passwordHash: h, mfaMethod: '', mustChangePassword: true };
+            appUsers = [admin];
+            safeStorage.setItem('ssmvp_users', JSON.stringify(appUsers));
+            pushUserToCloud(admin);
+        }
+    }
+
+    // Persist users: local cache + push every account to the Google Sheet (central).
     function saveAppUsers() {
         safeStorage.setItem('ssmvp_users', JSON.stringify(appUsers));
+        if (syncConfig.url) appUsers.forEach(u => pushUserToCloud(u));
     }
 
     // ====================== ORGANISATION DIRECTORY ======================
