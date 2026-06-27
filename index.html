@@ -3782,6 +3782,7 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
         // User management
         'user_created':      { icon: 'user-plus',       bg: 'bg-emerald-100', fg: 'text-emerald-600', label: 'User Created'             },
         'user_deleted':      { icon: 'user-minus',      bg: 'bg-red-100',     fg: 'text-red-600',     label: 'User Deleted'             },
+        'user_role_changed': { icon: 'user-cog',        bg: 'bg-amber-100',   fg: 'text-amber-600',   label: 'User Role Changed'        },
         'password_changed':  { icon: 'key-round',       bg: 'bg-amber-100',   fg: 'text-amber-600',   label: 'Password Changed'         },
         // Session
         'login':             { icon: 'log-in',          bg: 'bg-emerald-100', fg: 'text-emerald-600', label: 'User Logged In'           },
@@ -3867,7 +3868,7 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
                 const cats = {
                     finance:  ['donation_created','org_donation','expense_created','edit','void'],
                     directory:['donor_created','donor_updated','donor_deleted','vendor_created','vendor_updated','vendor_deleted','org_created','org_updated','org_deleted','sant_created','sant_updated','sant_deleted'],
-                    users:    ['user_created','user_deleted','password_changed'],
+                    users:    ['user_created','user_deleted','password_changed','user_role_changed'],
                     session:  ['login','failed_login','logout','session_timeout','mfa_configured'],
                     settings: ['sync_settings','email_template'],
                 };
@@ -4490,7 +4491,13 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
                         </div>
                     </div>
                 </div>
-                <div class="flex gap-2">
+                <div class="flex items-center gap-2">
+                    <select onchange="changeUserRole('${u.id}', this.value)" ${isSoleAdmin ? 'disabled' : ''}
+                        title="${isSoleAdmin ? 'The only admin\'s role cannot be changed' : 'Change role'}"
+                        class="text-xs font-semibold border border-slate-200 rounded-xl px-2 py-2 bg-white text-slate-600 ${isSoleAdmin ? 'opacity-50 cursor-not-allowed' : ''}">
+                        <option value="volunteer" ${u.role === 'volunteer' ? 'selected' : ''}>Volunteer</option>
+                        <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                    </select>
                     <button onclick="openReconfigureMfa('${u.id}')" title="Reconfigure MFA"
                         class="p-2 text-slate-400 hover:text-indigo-500 transition-colors" title="Reconfigure MFA">
                         <i data-lucide="shield-check" class="w-5 h-5"></i>
@@ -4507,6 +4514,25 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
             grid.appendChild(card);
         });
         lucide.createIcons();
+    }
+
+    // ── Change a user's role (Volunteer ↔ Admin) ──
+    function changeUserRole(userId, newRole) {
+        const u = appUsers.find(x => x.id === userId);
+        if (!u || u.role === newRole) return;
+        const adminCount = appUsers.filter(x => x.role === 'admin').length;
+        if (newRole !== 'admin' && u.role === 'admin' && adminCount === 1) {
+            showToast('You must keep at least one Admin.', 'red');
+            renderUsersGrid();   // revert the dropdown
+            return;
+        }
+        const oldRole = u.role;
+        u.role = newRole;
+        if (currentUser && currentUser.id === u.id) { currentUser.role = newRole; applyRoleRestrictions(); }
+        saveAppUsers();
+        renderUsersGrid();
+        audit('user_role_changed', `Changed ${u.name}'s role to ${newRole}`, `Was: ${oldRole} · Email: ${u.email}`);
+        showToast(`${u.name} is now ${newRole === 'admin' ? 'an Admin' : 'a Volunteer'}.`, 'emerald');
     }
 
     // ── Add user ──
