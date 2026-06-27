@@ -303,6 +303,36 @@
     </div>
 </div>
 
+<!-- ===================== EDIT USER MODAL ===================== -->
+<div id="edit-user-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-center justify-center p-6">
+    <div class="bg-white rounded-3xl max-w-md w-full p-10">
+        <h3 class="text-2xl font-black mb-2">Edit User</h3>
+        <p class="text-slate-500 text-sm mb-8">Update this user's name, login email, and role</p>
+        <div class="space-y-5">
+            <div>
+                <label class="block text-xs font-bold text-slate-500 mb-2 tracking-widest">NAME</label>
+                <input id="edit-user-name" type="text" class="input-focus w-full px-6 py-4 bg-zinc-50 border border-slate-200 rounded-2xl font-medium" placeholder="Full name">
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 mb-2 tracking-widest">EMAIL (LOGIN)</label>
+                <input id="edit-user-email" type="email" class="input-focus w-full px-6 py-4 bg-zinc-50 border border-slate-200 rounded-2xl font-medium" placeholder="user@vadtaldhamperth.org">
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 mb-2 tracking-widest">ROLE</label>
+                <select id="edit-user-role" class="custom-select input-focus w-full px-6 py-4 bg-zinc-50 border border-slate-200 rounded-2xl font-medium">
+                    <option value="volunteer">Volunteer — Donation &amp; Expense entry</option>
+                    <option value="admin">Admin — Full access + User management</option>
+                </select>
+            </div>
+            <div id="edit-user-error" class="text-red-500 text-sm font-semibold hidden"></div>
+        </div>
+        <div class="flex gap-4 mt-8">
+            <button onclick="closeEditUserModal()" class="flex-1 py-4 font-semibold text-slate-500 hover:bg-slate-100 rounded-3xl">Cancel</button>
+            <button onclick="saveEditUser()" class="flex-1 bg-orange-500 text-white font-bold py-4 rounded-3xl hover:bg-orange-600">Save Changes</button>
+        </div>
+    </div>
+</div>
+
 <div class="flex flex-col lg:flex-row min-h-screen">
 
     <!-- SIDEBAR -->
@@ -3783,6 +3813,7 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
         'user_created':      { icon: 'user-plus',       bg: 'bg-emerald-100', fg: 'text-emerald-600', label: 'User Created'             },
         'user_deleted':      { icon: 'user-minus',      bg: 'bg-red-100',     fg: 'text-red-600',     label: 'User Deleted'             },
         'user_role_changed': { icon: 'user-cog',        bg: 'bg-amber-100',   fg: 'text-amber-600',   label: 'User Role Changed'        },
+        'user_updated':      { icon: 'edit-2',          bg: 'bg-amber-100',   fg: 'text-amber-600',   label: 'User Renamed'             },
         'password_changed':  { icon: 'key-round',       bg: 'bg-amber-100',   fg: 'text-amber-600',   label: 'Password Changed'         },
         // Session
         'login':             { icon: 'log-in',          bg: 'bg-emerald-100', fg: 'text-emerald-600', label: 'User Logged In'           },
@@ -3868,7 +3899,7 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
                 const cats = {
                     finance:  ['donation_created','org_donation','expense_created','edit','void'],
                     directory:['donor_created','donor_updated','donor_deleted','vendor_created','vendor_updated','vendor_deleted','org_created','org_updated','org_deleted','sant_created','sant_updated','sant_deleted'],
-                    users:    ['user_created','user_deleted','password_changed','user_role_changed'],
+                    users:    ['user_created','user_deleted','password_changed','user_role_changed','user_updated'],
                     session:  ['login','failed_login','logout','session_timeout','mfa_configured'],
                     settings: ['sync_settings','email_template'],
                 };
@@ -4492,12 +4523,10 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
-                    <select onchange="changeUserRole('${u.id}', this.value)" ${isSoleAdmin ? 'disabled' : ''}
-                        title="${isSoleAdmin ? 'The only admin\'s role cannot be changed' : 'Change role'}"
-                        class="text-xs font-semibold border border-slate-200 rounded-xl px-2 py-2 bg-white text-slate-600 ${isSoleAdmin ? 'opacity-50 cursor-not-allowed' : ''}">
-                        <option value="volunteer" ${u.role === 'volunteer' ? 'selected' : ''}>Volunteer</option>
-                        <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
-                    </select>
+                    <button onclick="openEditUserModal('${u.id}')" title="Edit user"
+                        class="p-2 text-slate-400 hover:text-emerald-500 transition-colors">
+                        <i data-lucide="pencil" class="w-5 h-5"></i>
+                    </button>
                     <button onclick="openReconfigureMfa('${u.id}')" title="Reconfigure MFA"
                         class="p-2 text-slate-400 hover:text-indigo-500 transition-colors" title="Reconfigure MFA">
                         <i data-lucide="shield-check" class="w-5 h-5"></i>
@@ -4516,23 +4545,51 @@ ${d.entry.accountNumber ? `<div style="font-size:12px;font-weight:700;margin-top
         lucide.createIcons();
     }
 
-    // ── Change a user's role (Volunteer ↔ Admin) ──
-    function changeUserRole(userId, newRole) {
+    // ── Edit a user — name, login email, and role — for any user incl. admins ──
+    let editUserId = null;
+
+    function openEditUserModal(userId) {
         const u = appUsers.find(x => x.id === userId);
-        if (!u || u.role === newRole) return;
-        const adminCount = appUsers.filter(x => x.role === 'admin').length;
-        if (newRole !== 'admin' && u.role === 'admin' && adminCount === 1) {
-            showToast('You must keep at least one Admin.', 'red');
-            renderUsersGrid();   // revert the dropdown
-            return;
+        if (!u) return;
+        editUserId = userId;
+        document.getElementById('edit-user-name').value  = u.name  || '';
+        document.getElementById('edit-user-email').value = u.email || '';
+        document.getElementById('edit-user-role').value  = u.role  || 'volunteer';
+        document.getElementById('edit-user-error').classList.add('hidden');
+        document.getElementById('edit-user-modal').classList.remove('hidden');
+        setTimeout(() => document.getElementById('edit-user-name').focus(), 80);
+    }
+
+    function closeEditUserModal() {
+        document.getElementById('edit-user-modal').classList.add('hidden');
+        editUserId = null;
+    }
+
+    function saveEditUser() {
+        const u = appUsers.find(x => x.id === editUserId);
+        if (!u) { closeEditUserModal(); return; }
+        const errEl = document.getElementById('edit-user-error');
+        const show  = m => { errEl.textContent = m; errEl.classList.remove('hidden'); };
+        const name  = document.getElementById('edit-user-name').value.trim();
+        const email = document.getElementById('edit-user-email').value.trim().toLowerCase();
+        const role  = document.getElementById('edit-user-role').value;
+
+        if (!name) return show('Please enter a name.');
+        if (!email || !/\S+@\S+\.\S+/.test(email)) return show('Please enter a valid email address.');
+        if (appUsers.some(x => x.id !== u.id && (x.email || '').toLowerCase() === email)) return show('Another account already uses that email.');
+        if (role !== 'admin' && u.role === 'admin' && appUsers.filter(x => x.role === 'admin').length === 1) return show('You must keep at least one Admin.');
+
+        const before = `${u.name} <${u.email}> · ${u.role}`;
+        u.name = name; u.email = email; u.role = role;
+        if (currentUser && currentUser.id === u.id) {
+            currentUser.name = name; currentUser.email = email; currentUser.role = role;
+            updateSidebarUser(); applyRoleRestrictions();
         }
-        const oldRole = u.role;
-        u.role = newRole;
-        if (currentUser && currentUser.id === u.id) { currentUser.role = newRole; applyRoleRestrictions(); }
         saveAppUsers();
         renderUsersGrid();
-        audit('user_role_changed', `Changed ${u.name}'s role to ${newRole}`, `Was: ${oldRole} · Email: ${u.email}`);
-        showToast(`${u.name} is now ${newRole === 'admin' ? 'an Admin' : 'a Volunteer'}.`, 'emerald');
+        audit('user_updated', `Updated user "${name}"`, `Now: ${name} <${email}> · ${role} (was ${before})`);
+        showToast('User updated.', 'emerald');
+        closeEditUserModal();
     }
 
     // ── Add user ──
